@@ -119,8 +119,8 @@ function renderBreakdown(total, hostPct, host, hoopty, stripeFeeEst, hostNet) {
 function refreshPrice() {
   if (!car) return;
   var d = days();
-  if (!d || d < 1 || d > 30) {
-    $('priceLine').textContent = 'Pick dates — trips are 1–30 days.';
+  if (!d || d < 1 || d > 90) {
+    $('priceLine').textContent = 'Pick dates — trips are 1–90 days.';
     $('splitLine').textContent = '';
     $('breakdown').innerHTML = '';
     return;
@@ -240,7 +240,7 @@ $('payBtn').addEventListener('click', async function () {
   var name = $('renterName').value.trim();
   var d = days();
   if (!email || !name) { show('Enter your email and full legal name first.', 'err'); return; }
-  if (!d || d < 1 || d > 30) { show('Pick a trip of 1–30 days.', 'err'); return; }
+  if (!d || d < 1 || d > 90) { show('Pick a trip of 1–90 days.', 'err'); return; }
   $('payBtn').disabled = true;
   $('payBtn').textContent = 'Opening secure checkout…';
   try {

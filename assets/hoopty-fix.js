@@ -46,10 +46,12 @@
 //   - Homepage counts: while the first listCars answer has not
 //     settled yet, no count anywhere on the homepage may show 0 —
 //     the grid count line, the hero top line ("Car rental → United
-//     States · 0 cars available now") and every category button's
-//     "0 available" are hidden, and a "Loading cars…" line shows in
-//     the count line's place instead (see syncCountLine). A genuine
-//     0 — after an answer lands — is never hidden.
+//     States · 0 cars available now"), the "Cars available near you"
+//     section header count ("0 cars · book with a Renter Account",
+//     fix pass 4) and every category button's "0 available" are
+//     hidden, and a "Loading cars…" line shows in the count line's
+//     place instead (see syncCountLine). A genuine 0 — after an
+//     answer lands — is never hidden.
 //   - updateCarSettings / setCarAvailable / cancelBooking
 //     -> honest error: those need a backend endpoint that does not exist
 //     yet. Nothing is faked or saved locally for them — a car that only
@@ -71,13 +73,18 @@
   // ---- homepage counts: don't flash "0 cars" anywhere while loading ----
   // The bundle renders every count from its cars state, which starts as
   // an empty array — so before the first listCars answer lands, the page
-  // briefly claims 0 cars even when cars exist. Three spots do this:
+  // briefly claims 0 cars even when cars exist. Four spots do this:
   //   1. the grid count line ("0 cars available now · 0 listed · …"),
   //   2. the hero top line ("Car rental → United States · 0 cars
   //      available now"),
-  //   3. every "Browse by category" button ("0 available" under each
+  //   3. the "Cars available near you" section header count
+  //      ("0 cars · book with a Renter Account" — fix pass 4; the
+  //      bundle renders [re.length, " ", re.length===1?"car":"cars",
+  //      " · book with a Renter Account"] next to that <h2>, and
+  //      re.length is 0 until the first answer lands),
+  //   4. every "Browse by category" button ("0 available" under each
   //      category, plus "0 available" under "Everything").
-  // While no listCars answer has settled yet, the two lines are hidden
+  // While no listCars answer has settled yet, the lines are hidden
   // and a "Loading cars…" line shows in the grid line's place, and the
   // category counts are hidden (visibility only, so the buttons keep
   // their layout). The bundle's own text is never edited — it owns
@@ -95,6 +102,7 @@
     try {
       syncGridCountLine();
       syncHeroCountLine();
+      syncSectionCountLine();
       syncCategoryCounts();
     } catch (e) { /* never break the page over a cosmetic line */ }
   }
@@ -136,6 +144,41 @@
         ph = document.createElement('p');
         ph.id = 'hoopty-hero-loading';
         ph.textContent = 'Car rental → United States · Loading cars…';
+        // Same spot, same styling as the line it stands in for.
+        if (line.className) ph.className = line.className;
+        line.parentNode.insertBefore(ph, line);
+      }
+    } else {
+      line.style.visibility = '';
+      removePlaceholder(ph);
+    }
+  }
+  function syncSectionCountLine() {
+    // Fix pass 4 — the fourth spot pass 3 missed. The bundle renders,
+    // next to the "Cars available near you" <h2>, a <p> with
+    // [count, " ", count===1?"car":"cars", " · book with a Renter
+    // Account"] — so before the first listCars answer lands it reads
+    // "0 cars · book with a Renter Account" while the grid below it
+    // already says "Loading cars…". Same shim rule as the other
+    // spots: hide the line (visibility only, so the header layout
+    // does not shift) and stand a "Loading cars…" sibling in its
+    // place, with the same className as the line it stands in for.
+    // Once listCars settles (success OR failure) the real state
+    // shows — a genuine 0 is never hidden.
+    var ps = document.querySelectorAll('p');
+    var line = null;
+    for (var i = 0; i < ps.length; i++) {
+      if (/^\s*\d+\s+cars?\s+·\s+book with a Renter Account/.test(ps[i].textContent || '')) { line = ps[i]; break; }
+    }
+    var ph = (document.getElementById && document.getElementById('hoopty-section-loading')) || null;
+    if (!line) { removePlaceholder(ph); return; }
+    var isZero = /^\s*0\s+cars?\s+·\s+book with a Renter Account/.test(line.textContent || '');
+    if (!carsLoadedOnce && isZero) {
+      line.style.visibility = 'hidden';
+      if (!ph && line.parentNode && line.parentNode.insertBefore) {
+        ph = document.createElement('p');
+        ph.id = 'hoopty-section-loading';
+        ph.textContent = 'Loading cars…';
         // Same spot, same styling as the line it stands in for.
         if (line.className) ph.className = line.className;
         line.parentNode.insertBefore(ph, line);

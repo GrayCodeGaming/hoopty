@@ -31,7 +31,19 @@
 //                          payouts NOT ready until the host finishes Stripe
 //                          Connect onboarding, so checkout refuses it until
 //                          then — the car is never faked as bookable.
-//   - updateCarSettings / setCarAvailable / deleteCar / cancelBooking
+//                          Sends testListing:true when the host marked the
+//                          description "TEST LISTING ONLY" (the only way an
+//                          app listing gets the test flag), and records the
+//                          Owner Agreement the form collected inline — the
+//                          app never calls signAgreement for owners, so
+//                          without this the Earn page would forever say no
+//                          agreement is on file (see createCar below).
+//   - deleteCar         -> DELETE /api/listings/:id (added Nov 18, 2026).
+//                          Only the owning host can delete, and never while
+//                          a booking for the car is still live — the backend
+//                          refuses those with 403 / 409 and the app shows
+//                          the real reason.
+//   - updateCarSettings / setCarAvailable / cancelBooking
 //     -> honest error: those need a backend endpoint that does not exist
 //     yet. Nothing is faked or saved locally for them — a car that only
 //     exists on one phone is not a listing.
@@ -94,6 +106,20 @@
   function backendPost(path, body) {
     return origFetch(BACKEND_URL + path, {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) {
+          throw new Error((d && (d.error || d.message)) || ('Request failed: ' + r.status));
+        }
+        return d;
+      });
+    });
+  }
+  function backendDelete(path, body) {
+    return origFetch(BACKEND_URL + path, {
+      method: 'DELETE',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }).then(function (r) {
@@ -304,15 +330,37 @@
     createCar: function (args) {
       // The Earn form sends dollars (pricePerDay), a planKeep number
       // (70/80/90), fuelType/bodyType, and local-only fields (password,
-      // car photo, agreement) — the backend needs none of those last
-      // three, so they are NOT sent. A new car starts with payouts NOT
-      // ready until the host finishes Stripe Connect onboarding, so the
-      // backend returns it with payoutsReady:false and checkout refuses
-      // it until then. A 400 from the backend rejects with its message,
-      // so the app shows the real reason instead of saving nothing.
+      // car photo, agreement) — the backend needs the password and photo
+      // not at all, so they are NOT sent. A new car starts with payouts
+      // NOT ready until the host finishes Stripe Connect onboarding, so
+      // the backend returns it with payoutsReady:false and checkout
+      // refuses it until then. A 400 from the backend rejects with its
+      // message, so the app shows the real reason instead of saving
+      // nothing.
+      //
+      // TEST FLAG: the form has no "mark as test" checkbox — the only
+      // place the host expresses "this is a test listing" is the
+      // description ("TEST LISTING ONLY ..."). Pass that through as the
+      // backend's explicit testListing flag, so book.html shows the TEST
+      // banner the same way the seed Camry does. Anything else stays
+      // testListing:false — genuine listings are never marked test.
+      //
+      // OWNER AGREEMENT — ROOT CAUSE of the Earn page saying "No Owner
+      // Agreement on file yet" after a car was listed: the Earn form
+      // collects the agreement INLINE in the createCar args
+      // (agreementAccepted + agreementSignature) and never calls the
+      // signAgreement action for the owner role — and the app has no
+      // owner sign dialog at all (its sign dialog is only ever rendered
+      // for renters). The old createCar dropped those two fields, so the
+      // agreement was recorded nowhere and getMyAgreement({role:
+      // "owner"}) always came back null. Fix at the cause: when the host
+      // signed here, record the agreement in local storage under the
+      // same key getMyAgreement reads — exactly the pattern
+      // submitLicenseCheck already uses for the Renter Agreement.
+      var ownerName = String(args.ownerName || accountName() || '').trim();
       var body = {
         hostEmail: String(args.email || accountEmail() || '').trim(),
-        hostName: String(args.ownerName || accountName() || '').trim(),
+        hostName: ownerName,
         year: args.year,
         make: args.make,
         model: args.model,
@@ -328,8 +376,19 @@
         minTripDays: args.minTripDays,
         maxTripDays: args.maxTripDays,
         blockedDates: args.blockedDates,
+        testListing: /^TEST LISTING ONLY/i.test(String(args.description || '').trim()),
       };
       return backendPost('/api/listings', body).then(function (d) {
+        if (args.agreementAccepted && args.agreementSignature && ownerName) {
+          var all = readJson('hoopty-agreements', {});
+          all['owner:' + ownerName.toLowerCase()] = {
+            userName: ownerName,
+            role: 'owner',
+            signatureName: String(args.agreementSignature).trim(),
+            acceptedAt: new Date().toISOString(),
+          };
+          writeJson('hoopty-agreements', all);
+        }
         return jsonResponse({ car: mapCar(d.listing) });
       });
     },
@@ -341,9 +400,21 @@
       return Promise.reject(new Error(
         'Changing availability isn\u2019t connected yet — the backend doesn\u2019t have a list endpoint, so nothing changed.'));
     },
-    deleteCar: function () {
-      return Promise.reject(new Error(
-        'Removing a listing isn\u2019t connected yet — the backend doesn\u2019t have a list endpoint, so nothing was removed.'));
+    deleteCar: function (args) {
+      // DELETE /api/listings/:id — the backend checks ownership (only
+      // the host who listed the car, by signed-in email) and refuses
+      // while a booking for the car is still live (409). A 403/409/404
+      // rejects with the backend's message, so the app shows the real
+      // reason instead of pretending the car is gone.
+      var email = accountEmail();
+      if (!email) {
+        return Promise.reject(new Error('Sign in to remove a listing.'));
+      }
+      if (!args || !args.id) {
+        return Promise.reject(new Error('No listing was selected to remove.'));
+      }
+      return backendDelete('/api/listings/' + encodeURIComponent(args.id), { hostEmail: email })
+        .then(function () { return jsonResponse({}); });
     },
     cancelBooking: function () {
       return Promise.reject(new Error(

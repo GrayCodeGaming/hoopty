@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>License check — Hoopty</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#fafafa;color:#111}
+  main{max-width:560px;margin:0 auto;padding:32px 16px}
+  .card{background:#fff;border:2px solid #111;border-radius:16px;padding:20px}
+  .ok{background:#d4edda;border:2px solid #1e7e34;border-radius:12px;padding:12px}
+  .err{background:#f8d7da;border:2px solid #c00;border-radius:12px;padding:12px}
+  .warn{background:#fff3cd;border:2px solid #b58900;border-radius:12px;padding:12px}
+  a.btn{display:block;text-align:center;padding:14px;border-radius:999px;background:#111;color:#fff;font-weight:800;text-decoration:none;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>License check</h1>
+    <div id="status" class="warn">Checking with Stripe…</div>
+    <div id="actions"></div>
+    <p><a href="./">← Back to Hoopty</a></p>
+  </div>
+</main>
+<script>
+/* Return landing page for Stripe Identity. The backend re-checks the
+   VerificationSession with Stripe — this page never trusts the URL alone. */
+var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
+var params = new URLSearchParams(location.search);
+var email = (params.get('email') || '').toLowerCase();
+var box = document.getElementById('status');
+var actions = document.getElementById('actions');
+
+async function check(tries) {
+  if (!email) {
+    box.className = 'err';
+    box.textContent = 'No email in the return link — go back and verify from your Renter Account.';
+    return;
+  }
+  try {
+    var r = await fetch(BACKEND_URL + '/api/identity/status?email=' + encodeURIComponent(email));
+    var data = await r.json();
+    if (data.identityStatus === 'verified') {
+      box.className = 'ok';
+      box.textContent = '✓ Your license is verified — you can book now.';
+      localStorage.setItem('hoopty-identity', JSON.stringify({ email: email, status: 'verified' }));
+      actions.innerHTML = '<a class="btn" href="./book.html?verified=1">Continue to booking</a>';
+    } else if (data.identityStatus === 'failed' && tries <= 0) {
+      box.className = 'err';
+      box.textContent = 'Stripe couldn’t verify that license. You can try again from your Renter Account.';
+      actions.innerHTML = '<a class="btn" href="./book.html">Try again</a>';
+    } else if (tries > 0) {
+      box.textContent = 'Still confirming with Stripe… (' + tries + ')';
+      setTimeout(function () { check(tries - 1); }, 3000);
+    } else {
+      box.className = 'warn';
+      box.textContent = 'Verification is still processing. Check your Renter Account in a minute.';
+    }
+  } catch (err) {
+    box.className = 'err';
+    box.textContent = 'Couldn’t reach the server: ' + err.message;
+  }
+}
+check(5);
+</script>
+</body>
+</html>

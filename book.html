@@ -7,8 +7,9 @@
 <!--
   Hoopty Stripe booking page (v1).
   Drop this file into the hoopty repo root (next to index.html) at publish time.
-  It works against EITHER backend: the Node backend in ../backend/ or the Make
-  scenarios in ../make/ — set BACKEND_URL below to whichever is deployed.
+  It works against the Node backend in ../backend/ (live at
+  https://api.hoopty.rent). Make is OFF for Hoopty — the Make scenarios
+  are not used. BACKEND_URL below is already the live backend.
   Flow: pick dates -> license check (Stripe Identity, once) -> pay (Stripe
   Checkout, cards + wallets, phone collected) -> success page.
   No Stripe keys live in this file. Ever.
@@ -63,10 +64,27 @@
 </main>
 <script>
 /* CONFIG — set this to the deployed backend before publishing. */
-var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
+var BACKEND_URL = 'https://api.hoopty.rent'; // live backend
 var params = new URLSearchParams(location.search);
 var listingId = params.get('listing') || 'test-camry-001';
 var car = null;
+// Pay is only enabled when all three hold: payouts ready, license
+// verified, and the picked dates available. identityChecked stays false
+// until the backend has actually answered a license check — before that,
+// the button keeps its load-time state (enabled iff payouts ready) so a
+// returning verified renter is not blocked by a check that never ran.
+var identityChecked = false;
+var identityVerified = false;
+var datesAvailable = true;
+var availabilityWarning = false;
+function updatePayButton() {
+  if (!car) return;
+  if (!identityChecked) {
+    $('payBtn').disabled = !car.payoutsReady;
+    return;
+  }
+  $('payBtn').disabled = !(car.payoutsReady && identityVerified && datesAvailable);
+}
 
 function $(id) { return document.getElementById(id); }
 function show(html, cls) {
@@ -116,6 +134,9 @@ function refreshPrice() {
   var stripeFeeEst = Math.round(total * 0.029) + 30;
   renderBreakdown(total, hostPct, host, hoopty, stripeFeeEst, Math.max(0, host - stripeFeeEst));
   // Server-authoritative quote — replaces the local numbers when it lands.
+  // The quote also carries availability: if these dates overlap a paid
+  // booking (or a blocked day, or break the min/max trip), show it and
+  // keep Pay disabled instead of letting the renter reach checkout.
   fetch(BACKEND_URL + '/api/quote?listingId=' + encodeURIComponent(listingId) +
     '&startDate=' + encodeURIComponent($('startDate').value) +
     '&endDate=' + encodeURIComponent($('endDate').value))
@@ -124,6 +145,15 @@ function refreshPrice() {
       if (!q.ok) return;
       renderBreakdown(q.totalCents, q.hostPlan === 'starter' ? 70 : q.hostPlan === 'top_earner' ? 90 : 80,
         q.hostGrossCents, q.hooptyFeeCents, q.stripeFeeEstimateCents, q.hostNetCents);
+      datesAvailable = q.available !== false;
+      if (!datesAvailable) {
+        availabilityWarning = true;
+        show(q.unavailableReason || 'Those dates aren’t available for this car — pick different dates.', 'warn');
+      } else if (availabilityWarning) {
+        availabilityWarning = false;
+        show('', '');
+      }
+      updatePayButton();
     })
     .catch(function () { /* keep the local estimate — server is unreachable */ });
 }
@@ -160,14 +190,18 @@ async function checkIdentity() {
   try {
     var r = await fetch(BACKEND_URL + '/api/identity/status?email=' + encodeURIComponent(email));
     var data = await r.json();
+    identityChecked = true;
     if (data.identityStatus === 'verified') {
+      identityVerified = true;
       show('✓ License verified — you can book.', 'ok');
       $('verifyBtn').textContent = '✓ License verified';
       $('verifyBtn').disabled = true;
-      $('payBtn').disabled = !car.payoutsReady;
+      updatePayButton();
       localStorage.setItem('hoopty-identity', JSON.stringify({ email: email, status: 'verified' }));
       return true;
     }
+    identityVerified = false;
+    updatePayButton();
     show('License not verified yet — tap “Verify my driver’s license” below.', 'warn');
     return false;
   } catch (err) {
@@ -185,7 +219,10 @@ $('verifyBtn').addEventListener('click', async function () {
   try {
     var r = await fetch(BACKEND_URL + '/api/identity/start', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: email, fullName: name })
+      // listingId rides along so Stripe sends the renter back to THIS
+      // car's booking page after verifying — without it they land on
+      // the default test Camry's page instead.
+      body: JSON.stringify({ email: email, fullName: name, listingId: listingId })
     });
     var data = await r.json();
     if (!r.ok) throw new Error(data.error || data.message || 'Verification failed to start.');
@@ -215,7 +252,18 @@ $('payBtn').addEventListener('click', async function () {
     if (!r.ok) {
       if (data.error === 'identity_required') {
         show('Verify your driver’s license first (step 1 above), then pay.', 'warn');
-        $('payBtn').disabled = false;
+        updatePayButton();
+        $('payBtn').textContent = '2 · Pay with Stripe';
+        return;
+      }
+      if (data.error === 'dates_unavailable' || data.error === 'dates_blocked' ||
+          data.error === 'trip_too_short' || data.error === 'trip_too_long') {
+        // Someone else booked these dates (or they break the car's
+        // rules) after the quote was shown — show it, keep Pay off.
+        datesAvailable = false;
+        availabilityWarning = true;
+        show(data.message || 'Those dates aren’t available for this car — pick different dates.', 'warn');
+        updatePayButton();
         $('payBtn').textContent = '2 · Pay with Stripe';
         return;
       }
@@ -224,7 +272,7 @@ $('payBtn').addEventListener('click', async function () {
     location.href = data.checkoutUrl; // Stripe-hosted Checkout
   } catch (err) {
     show('Couldn’t open checkout: ' + err.message, 'err');
-    $('payBtn').disabled = false;
+    updatePayButton();
     $('payBtn').textContent = '2 · Pay with Stripe';
   }
 });

@@ -29,6 +29,12 @@
 var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
 var params = new URLSearchParams(location.search);
 var email = (params.get('email') || '').toLowerCase();
+// listing rides through from /api/identity/start so the renter returns
+// to the SAME car's booking page — without it they land on the default
+// test Camry's page.
+var listing = params.get('listing') || '';
+var bookLink = './book.html?verified=1' + (listing ? '&listing=' + encodeURIComponent(listing) : '');
+var bookPlainLink = './book.html' + (listing ? '?listing=' + encodeURIComponent(listing) : '');
 var box = document.getElementById('status');
 var actions = document.getElementById('actions');
 
@@ -45,11 +51,11 @@ async function check(tries) {
       box.className = 'ok';
       box.textContent = '✓ Your license is verified — you can book now.';
       localStorage.setItem('hoopty-identity', JSON.stringify({ email: email, status: 'verified' }));
-      actions.innerHTML = '<a class="btn" href="./book.html?verified=1">Continue to booking</a>';
+      actions.innerHTML = '<a class="btn" href="' + bookLink + '">Continue to booking</a>';
     } else if (data.identityStatus === 'failed' && tries <= 0) {
       box.className = 'err';
       box.textContent = 'Stripe couldn’t verify that license. You can try again from your Renter Account.';
-      actions.innerHTML = '<a class="btn" href="./book.html">Try again</a>';
+      actions.innerHTML = '<a class="btn" href="' + bookPlainLink + '">Try again</a>';
     } else if (tries > 0) {
       box.textContent = 'Still confirming with Stripe… (' + tries + ')';
       setTimeout(function () { check(tries - 1); }, 3000);

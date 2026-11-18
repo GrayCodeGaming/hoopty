@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Book a car — Hoopty</title>
+<!--
+  Hoopty Stripe booking page (v1).
+  Drop this file into the hoopty repo root (next to index.html) at publish time.
+  It works against EITHER backend: the Node backend in ../backend/ or the Make
+  scenarios in ../make/ — set BACKEND_URL below to whichever is deployed.
+  Flow: pick dates -> license check (Stripe Identity, once) -> pay (Stripe
+  Checkout, cards + wallets, phone collected) -> success page.
+  No Stripe keys live in this file. Ever.
+-->
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#fafafa;color:#111}
+  main{max-width:640px;margin:0 auto;padding:24px 16px 64px}
+  h1{font-size:26px;text-transform:uppercase;letter-spacing:.02em}
+  .card{background:#fff;border:2px solid #111;border-radius:16px;padding:16px;margin:16px 0}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row label{flex:1;min-width:140px;font-size:13px;font-weight:700}
+  input{width:100%;box-sizing:border-box;padding:10px;border:2px solid #ccc;border-radius:8px;margin-top:4px;font-size:16px}
+  button{width:100%;padding:14px;border:0;border-radius:999px;background:#111;color:#fff;font-weight:800;font-size:16px;cursor:pointer;margin-top:8px}
+  button:disabled{opacity:.5;cursor:default}
+  button.secondary{background:#fff;color:#111;border:2px solid #111}
+  .price{font-size:20px;font-weight:800}
+  .muted{color:#666;font-size:14px}
+  .warn{background:#fff3cd;border:2px solid #b58900;border-radius:12px;padding:12px}
+  .ok{background:#d4edda;border:2px solid #1e7e34;border-radius:12px;padding:12px}
+  .err{background:#f8d7da;border:2px solid #c00;border-radius:12px;padding:12px}
+  #status{margin:12px 0}
+</style>
+</head>
+<body>
+<main>
+  <p><a href="./">← Back to Hoopty</a></p>
+  <h1>Book this car</h1>
+  <div id="car" class="card"><p>Loading car…</p></div>
+
+  <div class="card">
+    <div class="row">
+      <label>Pickup date <input type="date" id="startDate"></label>
+      <label>Return date <input type="date" id="endDate"></label>
+    </div>
+    <div class="row">
+      <label>Your email <input type="email" id="renterEmail" placeholder="you@example.com" autocomplete="email"></label>
+      <label>Full legal name <input type="text" id="renterName" placeholder="Name on your license" autocomplete="name"></label>
+    </div>
+    <p class="price" id="priceLine"></p>
+    <p class="muted" id="splitLine"></p>
+    <div id="breakdown" class="card" style="margin:12px 0"></div>
+    <div id="status"></div>
+    <button id="verifyBtn" class="secondary" type="button">1 · Verify my driver’s license</button>
+    <button id="payBtn" type="button" disabled>2 · Pay with Stripe</button>
+    <p class="muted">You pay at booking — cards, Apple Pay, Google Pay, Link and more,
+    phone number collected at checkout like the Gray Code Enterprise store.
+    You pay the trip total only. The Stripe processing fee is paid by the
+    host out of their share — Hoopty keeps its full cut. Your license is
+    checked by Stripe Identity; Hoopty never sees or stores your license
+    photo or selfie.</p>
+  </div>
+</main>
+<script>
+/* CONFIG — set this to the deployed backend before publishing. */
+var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
+var params = new URLSearchParams(location.search);
+var listingId = params.get('listing') || 'test-camry-001';
+var car = null;
+
+function $(id) { return document.getElementById(id); }
+function show(html, cls) {
+  var el = $('status');
+  el.className = cls || '';
+  el.innerHTML = html;
+}
+function days() {
+  var s = new Date($('startDate').value + 'T12:00:00');
+  var e = new Date($('endDate').value + 'T12:00:00');
+  return Math.round((e - s) / 86400000);
+}
+function money(cents) { return '$' + (cents / 100).toFixed(2); }
+// Who pays what. The renter pays the trip total only. Hoopty keeps its
+// FULL cut. The host pays the Stripe processing fee out of their share, so
+// the host receives hostGross − Stripe fee. The fee shown here is an
+// ESTIMATE (2.9% + 30c on the total) — the actual fee varies by payment
+// method, and the host's FINAL net is set after payment from the real fee
+// on the charge. Never settle on the estimate.
+function renderBreakdown(total, hostPct, host, hoopty, stripeFeeEst, hostNet) {
+  $('priceLine').textContent = 'Total you pay: ' + money(total) + ' — ' + money(car.pricePerDayCents) + '/day × ' + days() + ' day' + (days() > 1 ? 's' : '');
+  $('splitLine').textContent = 'Host keeps ' + hostPct + '% · Hoopty keeps ' + (100 - hostPct) + '% (full cut — Hoopty pays no Stripe fees).';
+  $('breakdown').innerHTML =
+    '<b>Where the money goes</b>' +
+    '<br>Trip total (you pay): ' + money(total) +
+    '<br>Hoopty keeps ' + (100 - hostPct) + '%: ' + money(hoopty) +
+    '<br>Host share (' + hostPct + '%): ' + money(host) +
+    '<br>Stripe fee — paid by the host (estimate): −' + money(stripeFeeEst) +
+    '<br><b>Host receives (estimate): ' + money(hostNet) + '</b>' +
+    '<br><span class="muted">Estimate only — the real Stripe fee depends on how you pay, so the host’s final amount is set after payment.</span>';
+}
+function refreshPrice() {
+  if (!car) return;
+  var d = days();
+  if (!d || d < 1 || d > 30) {
+    $('priceLine').textContent = 'Pick dates — trips are 1–30 days.';
+    $('splitLine').textContent = '';
+    $('breakdown').innerHTML = '';
+    return;
+  }
+  // Instant local display (same 2.9% + 30c estimate as the backend), then
+  // the server quote below replaces it with the authoritative numbers.
+  var total = car.pricePerDayCents * d;
+  var hostPct = car.hostPlan === 'starter' ? 70 : car.hostPlan === 'top_earner' ? 90 : 80;
+  var host = Math.round(total * hostPct / 100);
+  var hoopty = total - host;
+  var stripeFeeEst = Math.round(total * 0.029) + 30;
+  renderBreakdown(total, hostPct, host, hoopty, stripeFeeEst, Math.max(0, host - stripeFeeEst));
+  // Server-authoritative quote — replaces the local numbers when it lands.
+  fetch(BACKEND_URL + '/api/quote?listingId=' + encodeURIComponent(listingId) +
+    '&startDate=' + encodeURIComponent($('startDate').value) +
+    '&endDate=' + encodeURIComponent($('endDate').value))
+    .then(function (r) { return r.json(); })
+    .then(function (q) {
+      if (!q.ok) return;
+      renderBreakdown(q.totalCents, q.hostPlan === 'starter' ? 70 : q.hostPlan === 'top_earner' ? 90 : 80,
+        q.hostGrossCents, q.hooptyFeeCents, q.stripeFeeEstimateCents, q.hostNetCents);
+    })
+    .catch(function () { /* keep the local estimate — server is unreachable */ });
+}
+
+async function loadCar() {
+  try {
+    var r = await fetch(BACKEND_URL + '/api/listings/' + encodeURIComponent(listingId));
+    var data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'Car not found.');
+    car = data.listing;
+    $('car').innerHTML =
+      '<h2 style="margin:0">' + car.year + ' ' + car.make + ' ' + car.model + '</h2>' +
+      '<p class="muted">' + car.location + ' · ' + car.type + ' · ' + car.seats + ' seats · ' + car.transmission + ' · ' + car.fuel + '</p>' +
+      '<p class="price">$' + (car.pricePerDayCents / 100).toFixed(2) + '/day</p>' +
+      (car.testListing ? '<p class="warn"><b>TEST LISTING</b> — for checking the Stripe flow only. Not a real car.</p>' : '') +
+      (car.payoutsReady ? '' : '<p class="warn">This host hasn’t finished Stripe payout setup yet — booking is paused for this car.</p>');
+    $('payBtn').disabled = !car.payoutsReady;
+    var today = new Date(), plus3 = new Date(Date.now() + 3 * 86400000);
+    $('startDate').value = today.toISOString().slice(0, 10);
+    $('endDate').value = plus3.toISOString().slice(0, 10);
+    refreshPrice();
+  } catch (err) {
+    $('car').innerHTML = '<p class="err">Couldn’t load this car: ' + err.message + '</p>';
+  }
+}
+
+async function checkIdentity() {
+  var email = $('renterEmail').value.trim().toLowerCase();
+  if (!email) { show('Enter your email first — your license check is tied to it.', 'err'); return false; }
+  try {
+    var r = await fetch(BACKEND_URL + '/api/identity/status?email=' + encodeURIComponent(email));
+    var data = await r.json();
+    if (data.identityStatus === 'verified') {
+      show('✓ License verified — you can book.', 'ok');
+      $('verifyBtn').textContent = '✓ License verified';
+      $('verifyBtn').disabled = true;
+      $('payBtn').disabled = !car.payoutsReady;
+      localStorage.setItem('hoopty-identity', JSON.stringify({ email: email, status: 'verified' }));
+      return true;
+    }
+    show('License not verified yet — tap “Verify my driver’s license” below.', 'warn');
+    return false;
+  } catch (err) {
+    show('Couldn’t check your license status: ' + err.message, 'err');
+    return false;
+  }
+}
+
+$('verifyBtn').addEventListener('click', async function () {
+  var email = $('renterEmail').value.trim().toLowerCase();
+  var name = $('renterName').value.trim();
+  if (!email || !name) { show('Enter your email and full legal name first.', 'err'); return; }
+  $('verifyBtn').disabled = true;
+  $('verifyBtn').textContent = 'Starting verification…';
+  try {
+    var r = await fetch(BACKEND_URL + '/api/identity/start', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: email, fullName: name })
+    });
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || data.message || 'Verification failed to start.');
+    if (data.alreadyVerified) { checkIdentity(); return; }
+    location.href = data.url; // Stripe-hosted Identity flow
+  } catch (err) {
+    show('Couldn’t start verification: ' + err.message, 'err');
+    $('verifyBtn').disabled = false;
+    $('verifyBtn').textContent = '1 · Verify my driver’s license';
+  }
+});
+
+$('payBtn').addEventListener('click', async function () {
+  var email = $('renterEmail').value.trim().toLowerCase();
+  var name = $('renterName').value.trim();
+  var d = days();
+  if (!email || !name) { show('Enter your email and full legal name first.', 'err'); return; }
+  if (!d || d < 1 || d > 30) { show('Pick a trip of 1–30 days.', 'err'); return; }
+  $('payBtn').disabled = true;
+  $('payBtn').textContent = 'Opening secure checkout…';
+  try {
+    var r = await fetch(BACKEND_URL + '/api/checkout', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ listingId: listingId, startDate: $('startDate').value, endDate: $('endDate').value, renterEmail: email, renterName: name })
+    });
+    var data = await r.json();
+    if (!r.ok) {
+      if (data.error === 'identity_required') {
+        show('Verify your driver’s license first (step 1 above), then pay.', 'warn');
+        $('payBtn').disabled = false;
+        $('payBtn').textContent = '2 · Pay with Stripe';
+        return;
+      }
+      throw new Error(data.message || data.error || 'Checkout failed.');
+    }
+    location.href = data.checkoutUrl; // Stripe-hosted Checkout
+  } catch (err) {
+    show('Couldn’t open checkout: ' + err.message, 'err');
+    $('payBtn').disabled = false;
+    $('payBtn').textContent = '2 · Pay with Stripe';
+  }
+});
+
+['startDate', 'endDate'].forEach(function (id) {
+  $(id).addEventListener('change', refreshPrice);
+});
+$('renterEmail').addEventListener('change', checkIdentity);
+if (params.get('verified') === '1') {
+  show('Back from license verification — checking your status…', 'warn');
+  setTimeout(checkIdentity, 500);
+}
+if (params.get('cancelled') === '1') {
+  show('Checkout was cancelled — nothing was charged. Your dates are still open.', 'warn');
+}
+loadCar();
+</script>
+</body>
+</html>

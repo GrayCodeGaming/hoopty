@@ -43,6 +43,10 @@
 //                          a booking for the car is still live — the backend
 //                          refuses those with 403 / 409 and the app shows
 //                          the real reason.
+//   - Homepage count line: while the first listCars answer has not
+//     settled yet, the "0 cars available · 0 listed" flash is hidden and
+//     a "Loading cars…" line shows in its place (see syncCountLine).
+//     A genuine 0 — after an answer lands — is never hidden.
 //   - updateCarSettings / setCarAvailable / cancelBooking
 //     -> honest error: those need a backend endpoint that does not exist
 //     yet. Nothing is faked or saved locally for them — a car that only
@@ -60,6 +64,46 @@
 
   var BACKEND_URL = 'https://api.hoopty.rent';
   var origFetch = window.fetch.bind(window);
+
+  // ---- homepage count line: don't flash "0 cars available · 0 listed" ---
+  // The bundle renders the count from its cars state, which starts as an
+  // empty array — so before the first listCars answer lands, the page
+  // briefly claims 0 cars even when cars exist. While no listCars answer
+  // has settled yet, hide that line and show a "Loading cars…" line in
+  // its place. The count line itself is never text-edited (the bundle
+  // owns those text nodes — rewriting them would break its next render);
+  // it is only hidden, and the placeholder is a sibling node the bundle
+  // never touches. Once listCars settles (success OR failure) the real
+  // state shows — a genuine 0 is never hidden.
+  var carsLoadedOnce = false;
+  function syncCountLine() {
+    try {
+      var ps = document.querySelectorAll('p');
+      var line = null;
+      for (var i = 0; i < ps.length; i++) {
+        if (/cars?\s+available now\s*·\s*\d+\s+listed/.test(ps[i].textContent || '')) { line = ps[i]; break; }
+      }
+      if (!line) return;
+      var ph = (document.getElementById && document.getElementById('hoopty-cars-loading')) || null;
+      var isZero = /^\s*0\s+cars?\s+available now\s*·\s*0\s+listed/.test(line.textContent || '');
+      if (!carsLoadedOnce && isZero) {
+        line.style.visibility = 'hidden';
+        if (!ph && line.parentNode && line.parentNode.insertBefore) {
+          ph = document.createElement('p');
+          ph.id = 'hoopty-cars-loading';
+          ph.textContent = 'Loading cars…';
+          ph.setAttribute('style', 'font-size:14px;font-weight:600;color:#666;margin:0;');
+          line.parentNode.insertBefore(ph, line);
+        }
+      } else {
+        line.style.visibility = '';
+        if (ph) {
+          if (ph.parentNode && ph.parentNode.removeChild) ph.parentNode.removeChild(ph);
+          else if (ph.remove) ph.remove();
+        }
+      }
+    } catch (e) { /* never break the page over a cosmetic line */ }
+  }
 
   // ---- small helpers -------------------------------------------------------
   function readJson(key, fallback) {
@@ -212,7 +256,15 @@
   var HANDLERS = {
     listCars: function () {
       return backendGet('/api/listings').then(function (d) {
+        carsLoadedOnce = true;
+        syncCountLine();
         return jsonResponse({ cars: (d.listings || []).map(mapCar) });
+      }, function (err) {
+        // Failed load is still a settled answer: show the real state
+        // (including the bundle's own error) instead of the placeholder.
+        carsLoadedOnce = true;
+        syncCountLine();
+        throw err;
       });
     },
     listBookings: function () {
@@ -502,11 +554,12 @@
     });
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', ensurePayoutsButton);
+    document.addEventListener('DOMContentLoaded', function () { ensurePayoutsButton(); syncCountLine(); });
   } else {
     ensurePayoutsButton();
+    syncCountLine();
   }
-  var mo = new MutationObserver(function () { ensurePayoutsButton(); });
+  var mo = new MutationObserver(function () { ensurePayoutsButton(); syncCountLine(); });
   mo.observe(document.documentElement, { childList: true, subtree: true });
   setTimeout(function () { mo.disconnect(); }, 120000);
 })();

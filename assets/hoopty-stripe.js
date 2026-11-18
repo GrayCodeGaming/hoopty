@@ -94,26 +94,53 @@
 
   // Add a "Book with Stripe" button to each car card. Car cards show a
   // "$NN/day" price; we attach next to the card's existing buttons.
+  // The listing id comes from matching the card's "YEAR MAKE MODEL" text
+  // against the backend listings — not a hardcoded default (the old code
+  // always opened the test Camry, even on another car's card).
+  var cachedListings = null;
+  var listingsPromise = null;
+  function getListings() {
+    if (cachedListings) return Promise.resolve(cachedListings);
+    if (!listingsPromise) {
+      listingsPromise = HooptyStripe.listCars().then(function (list) {
+        cachedListings = list || [];
+        return cachedListings;
+      }).catch(function () { return []; });
+    }
+    return listingsPromise;
+  }
   function attachBookButtons() {
     var cards = document.querySelectorAll('[class*="rounded"]');
     cards.forEach(function (card) {
       if (card.querySelector('[data-hoopty-stripe-book]')) return;
-      var price = card.querySelector('span');
-      if (!price || !/\$\d+\/day/.test(card.textContent || '')) return;
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.setAttribute('data-hoopty-stripe-book', '1');
-      btn.textContent = 'Book with Stripe';
-      btn.className = 'hoopty-stripe-book';
-      btn.setAttribute(
-        'style',
-        'margin-top:8px;width:100%;padding:10px;border-radius:999px;border:2px solid #111;background:#111;color:#fff;font-weight:800;cursor:pointer;'
-      );
-      btn.addEventListener('click', function () {
-        var id = card.getAttribute('data-listing-id') || 'test-camry-001';
-        HooptyStripe.book(id);
+      var text = card.textContent || '';
+      if (!/\$\d+\/day/.test(text)) return;
+      getListings().then(function (list) {
+        if (card.querySelector('[data-hoopty-stripe-book]')) return;
+        var id = null;
+        for (var i = 0; i < list.length; i++) {
+          var l = list[i];
+          if (text.indexOf(l.year + ' ' + l.make + ' ' + l.model) !== -1) {
+            id = l.id;
+            break;
+          }
+        }
+        if (!id && list.length === 1) id = list[0].id;
+        if (!id) id = 'test-camry-001';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-hoopty-stripe-book', '1');
+        btn.textContent = 'Book with Stripe';
+        btn.className = 'hoopty-stripe-book';
+        btn.setAttribute(
+          'style',
+          'margin-top:8px;width:100%;padding:10px;border-radius:999px;border:2px solid #111;background:#111;color:#fff;font-weight:800;cursor:pointer;'
+        );
+        btn.addEventListener('click', function () {
+          HooptyStripe.book(id);
+        });
+        card.appendChild(btn);
       });
-      card.appendChild(btn);
     });
   }
 

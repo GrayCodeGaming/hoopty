@@ -26,11 +26,15 @@
 //   - createBooking     -> redirects to book.html (Stripe Checkout is the
 //                          only way a booking is paid; the in-app dialog
 //                          never books directly any more)
-//   - createCar / updateCarSettings / setCarAvailable / deleteCar /
-//     cancelBooking -> honest error: those need a backend endpoint that
-//     does not exist yet (see PUBLISH-PLAN.md). Nothing is faked or
-//     saved locally for them — a car that only exists on one phone is
-//     not a listing.
+//   - createCar         -> POST /api/listings (the backend's list endpoint,
+//                          added Nov 18, 2026). A new car starts with
+//                          payouts NOT ready until the host finishes Stripe
+//                          Connect onboarding, so checkout refuses it until
+//                          then — the car is never faked as bookable.
+//   - updateCarSettings / setCarAvailable / deleteCar / cancelBooking
+//     -> honest error: those need a backend endpoint that does not exist
+//     yet. Nothing is faked or saved locally for them — a car that only
+//     exists on one phone is not a listing.
 //
 // WHAT IT DOES NOT DO:
 //   - No Stripe keys, no tax, no fake inventory. The only listing is the
@@ -143,9 +147,9 @@
       description: l.description || '',
       ownerName: l.hostName,
       available: !!l.payoutsReady,
-      minTripDays: 1,
-      maxTripDays: 90,
-      blockedDates: [],
+      minTripDays: l.minTripDays || 1,
+      maxTripDays: l.maxTripDays || 90,
+      blockedDates: l.blockedDates || [],
       planKeep: planKeep(l.hostPlan),
       testListing: !!l.testListing,
     };
@@ -297,9 +301,37 @@
       window.location.href = q;
       return new Promise(function () { /* navigation takes over */ });
     },
-    createCar: function () {
-      return Promise.reject(new Error(
-        'Listing a car from the app isn\u2019t connected yet — the backend doesn\u2019t have a list endpoint, so this car wasn\u2019t saved. Payout setup below still works.'));
+    createCar: function (args) {
+      // The Earn form sends dollars (pricePerDay), a planKeep number
+      // (70/80/90), fuelType/bodyType, and local-only fields (password,
+      // car photo, agreement) — the backend needs none of those last
+      // three, so they are NOT sent. A new car starts with payouts NOT
+      // ready until the host finishes Stripe Connect onboarding, so the
+      // backend returns it with payoutsReady:false and checkout refuses
+      // it until then. A 400 from the backend rejects with its message,
+      // so the app shows the real reason instead of saving nothing.
+      var body = {
+        hostEmail: String(args.email || accountEmail() || '').trim(),
+        hostName: String(args.ownerName || accountName() || '').trim(),
+        year: args.year,
+        make: args.make,
+        model: args.model,
+        location: args.location,
+        pricePerDay: args.pricePerDay,
+        seats: args.seats,
+        transmission: args.transmission,
+        fuelType: args.fuelType,
+        bodyType: args.bodyType,
+        features: args.features,
+        description: args.description,
+        planKeep: args.planKeep,
+        minTripDays: args.minTripDays,
+        maxTripDays: args.maxTripDays,
+        blockedDates: args.blockedDates,
+      };
+      return backendPost('/api/listings', body).then(function (d) {
+        return jsonResponse({ car: mapCar(d.listing) });
+      });
     },
     updateCarSettings: function () {
       return Promise.reject(new Error(

@@ -144,6 +144,10 @@ async function loadCar() {
     var today = new Date(), plus3 = new Date(Date.now() + 3 * 86400000);
     $('startDate').value = today.toISOString().slice(0, 10);
     $('endDate').value = plus3.toISOString().slice(0, 10);
+    // Dates passed in from the app's booking dialog (?start=YYYY-MM-DD&end=...).
+    var ps = params.get('start'), pe = params.get('end');
+    if (ps && /^\d{4}-\d{2}-\d{2}$/.test(ps)) $('startDate').value = ps;
+    if (pe && /^\d{4}-\d{2}-\d{2}$/.test(pe)) $('endDate').value = pe;
     refreshPrice();
   } catch (err) {
     $('car').innerHTML = '<p class="err">Couldn’t load this car: ' + err.message + '</p>';

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Payout setup — Hoopty</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#fafafa;color:#111}
+  main{max-width:560px;margin:0 auto;padding:32px 16px}
+  .card{background:#fff;border:2px solid #111;border-radius:16px;padding:20px}
+  .ok{background:#d4edda;border:2px solid #1e7e34;border-radius:12px;padding:12px}
+  .err{background:#f8d7da;border:2px solid #c00;border-radius:12px;padding:12px}
+  .warn{background:#fff3cd;border:2px solid #b58900;border-radius:12px;padding:12px}
+  a.btn{display:block;text-align:center;padding:14px;border-radius:999px;background:#111;color:#fff;font-weight:800;text-decoration:none;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>Payout setup</h1>
+    <div id="status" class="warn">Checking with Stripe…</div>
+    <div id="actions"></div>
+    <p><a href="./">← Back to Hoopty</a></p>
+  </div>
+</main>
+<script>
+/* Return landing page for Stripe Connect onboarding. The backend re-checks
+   the Express account with Stripe — this page never trusts the URL alone.
+   Stripe's return link carries no email, so the signed-in Earn Account
+   email is read from this browser's local storage (same device that
+   started onboarding). */
+var BACKEND_URL = 'https://api.hoopty.rent';
+var params = new URLSearchParams(location.search);
+var box = document.getElementById('status');
+var actions = document.getElementById('actions');
+var email = '';
+try {
+  var a = JSON.parse(localStorage.getItem('hoopty-account') || 'null');
+  email = (a && a.email) ? String(a.email).toLowerCase() : '';
+} catch (e) { email = ''; }
+
+async function check(tries) {
+  if (!email) {
+    box.className = 'warn';
+    box.textContent = 'We couldn\u2019t tell which host just finished onboarding on this device. If you just finished Stripe onboarding, payouts usually activate within a minute — check your Earn Account.';
+    actions.innerHTML = '<a class="btn" href="./">Back to Hoopty</a>';
+    return;
+  }
+  try {
+    var r = await fetch(BACKEND_URL + '/api/connect/status?email=' + encodeURIComponent(email));
+    var data = await r.json();
+    if (data.onboarded) {
+      box.className = 'ok';
+      box.textContent = '✓ Payouts ready — Stripe will pay your bank after each trip. You can list cars now.';
+      actions.innerHTML = '<a class="btn" href="./">Back to Hoopty</a>';
+    } else if (tries > 0) {
+      box.textContent = 'Still confirming with Stripe… (' + tries + ')';
+      setTimeout(function () { check(tries - 1); }, 3000);
+    } else {
+      box.className = 'warn';
+      box.textContent = 'Payout setup isn\u2019t finished yet. Go back to your Earn Account and tap “Set up payouts with Stripe” to continue where you left off.';
+      actions.innerHTML = '<a class="btn" href="./">Back to Hoopty</a>';
+    }
+  } catch (err) {
+    box.className = 'err';
+    box.textContent = 'Couldn\u2019t reach the server: ' + err.message;
+  }
+}
+if (params.get('onboarding') === 'refresh') {
+  box.textContent = 'That onboarding link expired — start payout setup again from your Earn Account.';
+  box.className = 'warn';
+  actions.innerHTML = '<a class="btn" href="./">Back to Hoopty</a>';
+} else {
+  check(5);
+}
+</script>
+</body>
+</html>

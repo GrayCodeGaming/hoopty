@@ -26,7 +26,7 @@
 <script>
 /* Success landing page. Confirms the payment by asking the backend for the
    real Checkout Session status — a return URL alone proves nothing. */
-var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
+var BACKEND_URL = 'https://api.hoopty.rent'; // live backend
 var sessionId = new URLSearchParams(location.search).get('session_id');
 var box = document.getElementById('status');
 var actions = document.getElementById('actions');

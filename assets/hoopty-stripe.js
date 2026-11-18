@@ -21,7 +21,7 @@
 //   - It does NOT store listings or trips itself — those come from the
 //     backend (GET /api/listings, GET /api/bookings?email=...).
 (function () {
-  var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
+  var BACKEND_URL = 'https://api.hoopty.rent'; // live backend
 
   function accountEmail() {
     try {
@@ -126,7 +126,14 @@
           }
         }
         if (!id && list.length === 1) id = list[0].id;
-        if (!id) id = 'test-camry-001';
+        // No match and no single listing to fall back on: do NOT guess
+        // the test Camry. A "Book with Stripe" button that opens the
+        // wrong car is worse than no button — the card's car is not in
+        // the list the backend returned (or the list failed to load),
+        // and book.html would show the wrong car. The observer
+        // re-scans on every render, so the button appears once the
+        // listings load and the car matches.
+        if (!id) return;
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.setAttribute('data-hoopty-stripe-book', '1');

@@ -21,7 +21,12 @@
   var MAX_RETRIES = 2;
 
   function findImg() {
-    return document.querySelector('img[src*="hoopty-cover-art"]');
+    // The bundle's hero <img> src is ./assets/hoopty-cover.jpg (fixed
+    // Nov 18, 2026 — the old hoopty-cover-art-*.jpg name no longer
+    // exists, so matching only that left this loader a no-op: no retry,
+    // no fallback banner). Match the live name first, keep the old one
+    // as a fallback in case a future bundle regen restores it.
+    return document.querySelector('img[src*="hoopty-cover.jpg"], img[src*="hoopty-cover-art"]');
   }
 
   function showFallback(img) {

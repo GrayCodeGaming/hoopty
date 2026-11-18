@@ -43,10 +43,13 @@
 //                          a booking for the car is still live — the backend
 //                          refuses those with 403 / 409 and the app shows
 //                          the real reason.
-//   - Homepage count line: while the first listCars answer has not
-//     settled yet, the "0 cars available · 0 listed" flash is hidden and
-//     a "Loading cars…" line shows in its place (see syncCountLine).
-//     A genuine 0 — after an answer lands — is never hidden.
+//   - Homepage counts: while the first listCars answer has not
+//     settled yet, no count anywhere on the homepage may show 0 —
+//     the grid count line, the hero top line ("Car rental → United
+//     States · 0 cars available now") and every category button's
+//     "0 available" are hidden, and a "Loading cars…" line shows in
+//     the count line's place instead (see syncCountLine). A genuine
+//     0 — after an answer lands — is never hidden.
 //   - updateCarSettings / setCarAvailable / cancelBooking
 //     -> honest error: those need a backend endpoint that does not exist
 //     yet. Nothing is faked or saved locally for them — a car that only
@@ -65,44 +68,103 @@
   var BACKEND_URL = 'https://api.hoopty.rent';
   var origFetch = window.fetch.bind(window);
 
-  // ---- homepage count line: don't flash "0 cars available · 0 listed" ---
-  // The bundle renders the count from its cars state, which starts as an
-  // empty array — so before the first listCars answer lands, the page
-  // briefly claims 0 cars even when cars exist. While no listCars answer
-  // has settled yet, hide that line and show a "Loading cars…" line in
-  // its place. The count line itself is never text-edited (the bundle
-  // owns those text nodes — rewriting them would break its next render);
-  // it is only hidden, and the placeholder is a sibling node the bundle
-  // never touches. Once listCars settles (success OR failure) the real
-  // state shows — a genuine 0 is never hidden.
+  // ---- homepage counts: don't flash "0 cars" anywhere while loading ----
+  // The bundle renders every count from its cars state, which starts as
+  // an empty array — so before the first listCars answer lands, the page
+  // briefly claims 0 cars even when cars exist. Three spots do this:
+  //   1. the grid count line ("0 cars available now · 0 listed · …"),
+  //   2. the hero top line ("Car rental → United States · 0 cars
+  //      available now"),
+  //   3. every "Browse by category" button ("0 available" under each
+  //      category, plus "0 available" under "Everything").
+  // While no listCars answer has settled yet, the two lines are hidden
+  // and a "Loading cars…" line shows in the grid line's place, and the
+  // category counts are hidden (visibility only, so the buttons keep
+  // their layout). The bundle's own text is never edited — it owns
+  // those text nodes, and rewriting them would break its next render;
+  // nodes are only hidden, and the placeholders are sibling nodes the
+  // bundle never touches. Once listCars settles (success OR failure)
+  // the real state shows — a genuine 0 is never hidden.
   var carsLoadedOnce = false;
+  function removePlaceholder(ph) {
+    if (!ph) return;
+    if (ph.parentNode && ph.parentNode.removeChild) ph.parentNode.removeChild(ph);
+    else if (ph.remove) ph.remove();
+  }
   function syncCountLine() {
     try {
-      var ps = document.querySelectorAll('p');
-      var line = null;
-      for (var i = 0; i < ps.length; i++) {
-        if (/cars?\s+available now\s*·\s*\d+\s+listed/.test(ps[i].textContent || '')) { line = ps[i]; break; }
-      }
-      if (!line) return;
-      var ph = (document.getElementById && document.getElementById('hoopty-cars-loading')) || null;
-      var isZero = /^\s*0\s+cars?\s+available now\s*·\s*0\s+listed/.test(line.textContent || '');
-      if (!carsLoadedOnce && isZero) {
-        line.style.visibility = 'hidden';
-        if (!ph && line.parentNode && line.parentNode.insertBefore) {
-          ph = document.createElement('p');
-          ph.id = 'hoopty-cars-loading';
-          ph.textContent = 'Loading cars…';
-          ph.setAttribute('style', 'font-size:14px;font-weight:600;color:#666;margin:0;');
-          line.parentNode.insertBefore(ph, line);
-        }
-      } else {
-        line.style.visibility = '';
-        if (ph) {
-          if (ph.parentNode && ph.parentNode.removeChild) ph.parentNode.removeChild(ph);
-          else if (ph.remove) ph.remove();
-        }
-      }
+      syncGridCountLine();
+      syncHeroCountLine();
+      syncCategoryCounts();
     } catch (e) { /* never break the page over a cosmetic line */ }
+  }
+  function syncGridCountLine() {
+    var ps = document.querySelectorAll('p');
+    var line = null;
+    for (var i = 0; i < ps.length; i++) {
+      if (/cars?\s+available now\s*·\s*\d+\s+listed/.test(ps[i].textContent || '')) { line = ps[i]; break; }
+    }
+    var ph = (document.getElementById && document.getElementById('hoopty-cars-loading')) || null;
+    if (!line) { removePlaceholder(ph); return; }
+    var isZero = /^\s*0\s+cars?\s+available now\s*·\s*0\s+listed/.test(line.textContent || '');
+    if (!carsLoadedOnce && isZero) {
+      line.style.visibility = 'hidden';
+      if (!ph && line.parentNode && line.parentNode.insertBefore) {
+        ph = document.createElement('p');
+        ph.id = 'hoopty-cars-loading';
+        ph.textContent = 'Loading cars…';
+        ph.setAttribute('style', 'font-size:14px;font-weight:600;color:#666;margin:0;');
+        line.parentNode.insertBefore(ph, line);
+      }
+    } else {
+      line.style.visibility = '';
+      removePlaceholder(ph);
+    }
+  }
+  function syncHeroCountLine() {
+    var ps = document.querySelectorAll('p');
+    var line = null;
+    for (var i = 0; i < ps.length; i++) {
+      if (/Car rental\s*→\s*United States\s*·\s*\d+\s+cars?\s+available now/.test(ps[i].textContent || '')) { line = ps[i]; break; }
+    }
+    var ph = (document.getElementById && document.getElementById('hoopty-hero-loading')) || null;
+    if (!line) { removePlaceholder(ph); return; }
+    var isZero = /·\s*0\s+cars?\s+available now/.test(line.textContent || '');
+    if (!carsLoadedOnce && isZero) {
+      line.style.visibility = 'hidden';
+      if (!ph && line.parentNode && line.parentNode.insertBefore) {
+        ph = document.createElement('p');
+        ph.id = 'hoopty-hero-loading';
+        ph.textContent = 'Car rental → United States · Loading cars…';
+        // Same spot, same styling as the line it stands in for.
+        if (line.className) ph.className = line.className;
+        line.parentNode.insertBefore(ph, line);
+      }
+    } else {
+      line.style.visibility = '';
+      removePlaceholder(ph);
+    }
+  }
+  function syncCategoryCounts() {
+    var spans;
+    try {
+      spans = document.querySelectorAll('button[aria-label^="Browse "] span');
+    } catch (e) {
+      return;
+    }
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i];
+      if (!sp || !sp.style) continue;
+      var isZero = /^\s*0\s+available\s*$/.test(sp.textContent || '');
+      if (!carsLoadedOnce && isZero) {
+        sp.style.visibility = 'hidden';
+      } else if (carsLoadedOnce) {
+        // Restore unconditionally: a span hidden while "0 available"
+        // that flips to "1 available" on the answer must come back —
+        // checking isZero first would leave it hidden forever.
+        sp.style.visibility = '';
+      }
+    }
   }
 
   // ---- small helpers -------------------------------------------------------

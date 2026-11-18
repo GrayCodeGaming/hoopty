@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Booking confirmed — Hoopty</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#fafafa;color:#111}
+  main{max-width:560px;margin:0 auto;padding:32px 16px}
+  .card{background:#fff;border:2px solid #111;border-radius:16px;padding:20px}
+  .ok{background:#d4edda;border:2px solid #1e7e34;border-radius:12px;padding:12px}
+  .err{background:#f8d7da;border:2px solid #c00;border-radius:12px;padding:12px}
+  .warn{background:#fff3cd;border:2px solid #b58900;border-radius:12px;padding:12px}
+  a.btn{display:block;text-align:center;padding:14px;border-radius:999px;background:#111;color:#fff;font-weight:800;text-decoration:none;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>Booking confirmed</h1>
+    <div id="status" class="warn">Confirming your payment with Stripe…</div>
+    <div id="actions"></div>
+    <p><a href="./">← Back to Hoopty</a></p>
+  </div>
+</main>
+<script>
+/* Success landing page. Confirms the payment by asking the backend for the
+   real Checkout Session status — a return URL alone proves nothing. */
+var BACKEND_URL = 'https://api.hoopty.rent'; // <-- REPLACE at deploy time
+var sessionId = new URLSearchParams(location.search).get('session_id');
+var box = document.getElementById('status');
+var actions = document.getElementById('actions');
+
+async function confirm() {
+  if (!sessionId) {
+    box.className = 'err';
+    box.textContent = 'No checkout session in the link. If you paid, check Trips — or contact info@graycodeenterprise.net.';
+    return;
+  }
+  try {
+    var r = await fetch(BACKEND_URL + '/api/checkout/session?session_id=' + encodeURIComponent(sessionId));
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Lookup failed.');
+    if (data.paymentStatus === 'paid') {
+      box.className = 'ok';
+      box.textContent = '✓ Paid ' + '$' + (data.amountTotalCents / 100).toFixed(2) +
+        '. Your trip is booked — meet the host at pickup as arranged. See it under Trips.';
+      actions.innerHTML = '<a class="btn" href="./">See my trips</a>';
+    } else {
+      box.className = 'warn';
+      box.textContent = 'Payment status: ' + data.paymentStatus + '. If you just paid, give it a minute, then check Trips.';
+      actions.innerHTML = '<a class="btn" href="./">Back to Hoopty</a>';
+    }
+  } catch (err) {
+    box.className = 'err';
+    box.textContent = 'Couldn’t confirm the payment yet: ' + err.message + ' — check Trips, or contact info@graycodeenterprise.net.';
+  }
+}
+confirm();
+</script>
+</body>
+</html>
